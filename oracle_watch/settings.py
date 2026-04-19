@@ -1,10 +1,12 @@
 """
 Django settings for Oracle-Watch project.
 """
-
+import dj_database_url
+from decouple import config # Since you are already using python-decouple
 import os
 from pathlib import Path
 from decouple import config
+
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -71,14 +73,11 @@ WSGI_APPLICATION = 'oracle_watch.wsgi.application'
 
 # Database Configuration
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME', default='oracle_watch_db'),
-        'USER': config('DB_USER', default='postgres'),
-        'PASSWORD': config('DB_PASSWORD', default='postgres'),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
-    }
+    'default': dj_database_url.config(
+        default=config('DATABASE_URL'),
+        conn_max_age=600,
+        ssl_require=not config('DEBUG', cast=bool)
+    )
 }
 
 # Password validation
