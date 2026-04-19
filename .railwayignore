@@ -1,0 +1,25 @@
+# Railway Ignore File
+# Files that should not be deployed to Railway
+
+venv/
+.venv/
+env/
+.git/
+.gitignore
+.env
+.env.local
+.env.*.local
+notes/
+frontend/
+*.sqlite3
+__pycache__/
+.pytest_cache/
+.coverage
+.DS_Store
+Thumbs.db
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.mypy_cache/
