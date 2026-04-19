@@ -145,6 +145,13 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
+# CSRF Configuration
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='http://localhost:3000,http://localhost:8000',
+    cast=lambda v: [s.strip() for s in v.split(',')]
+)
+
 # Spectacular/Swagger Configuration
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Oracle-Watch API',
@@ -155,3 +162,8 @@ SPECTACULAR_SETTINGS = {
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
+
+if not config('DEBUG', cast=bool):
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
