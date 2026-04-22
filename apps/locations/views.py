@@ -293,55 +293,97 @@ class BulkCreatePollingUnitsView(APIView):
     
     @transaction.atomic
     def post(self, request):
-        wards_data = request.data.get('wards', [])
-        polling_units_data = request.data.get('polling_units', [])
-        
-        created_wards = []
-        created_polling_units = []
-        errors = []
-        
-        # Create wards
-        for ward_data in wards_data:
-            try:
-                ward = Ward.objects.create(
-                    name=ward_data['name'],
-                    lga_id=ward_data['lga_id']
+        try:
+            wards_data = request.data.get('wards', [])
+            polling_units_data = request.data.get('polling_units', [])
+            
+            if not wards_data and not polling_units_data:
+                return Response(
+                    {'error': 'No wards or polling units provided'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                created_wards.append({
-                    'id': str(ward.id),
-                    'name': ward.name,
-                    'lga_id': str(ward.lga_id)
-                })
-            except Exception as e:
-                errors.append(f"Ward creation error: {str(e)}")
-        
-        # Create polling units
-        for pu_data in polling_units_data:
-            try:
-                password = generate_polling_unit_password()
-                pu = PollingUnit.objects.create(
-                    name=pu_data['name'],
-                    ward_id=pu_data['ward_id'],
-                    lga_id=pu_data['lga_id'],
-                    password=make_password(password),
-                    plaintext_password=password
+            
+            created_wards = []
+            created_polling_units = []
+            errors = []
+            
+            # Create wards
+            for ward_data in wards_data:
+                try:
+                    # Validate required fields
+                    if 'name' not in ward_data or 'lga_id' not in ward_data:
+                        errors.append("Ward missing 'name' or 'lga_id'")
+                        continue
+                    
+                    ward = Ward.objects.create(
+                        name=ward_data['name'],
+                        lga_id=ward_data['lga_id']
+                    )
+                    created_wards.append({
+                        'id': str(ward.id),
+                        'name': ward.name,
+                        'lga_id': str(ward.lga_id)
+                    })
+                except Exception as e:
+                    error_msg = f"Ward '{ward_data.get('name', 'unknown')}' creation failed: {str(e)}"
+                    errors.append(error_msg)
+                    print(f"[BULK CREATE] {error_msg}")  # Log to console
+            
+            # Create polling units
+            for pu_data in polling_units_data:
+                try:
+                    # Validate required fields
+                    if 'name' not in pu_data or 'ward_id' not in pu_data or 'lga_id' not in pu_data:
+                        errors.append("Polling unit missing 'name', 'ward_id', or 'lga_id'")
+                        continue
+                    
+                    password = generate_polling_unit_password()
+                    pu = PollingUnit.objects.create(
+                        name=pu_data['name'],
+                        ward_id=pu_data['ward_id'],
+                        lga_id=pu_data['lga_id'],
+                        password=make_password(password),
+                        plaintext_password=password
+                    )
+                    created_polling_units.append({
+                        'unit_id': pu.unit_id,
+                        'name': pu.name,
+                        'password': password
+                    })
+                except Exception as e:
+                    error_msg = f"Polling unit '{pu_data.get('name', 'unknown')}' creation failed: {str(e)}"
+                    errors.append(error_msg)
+                    print(f"[BULK CREATE] {error_msg}")  # Log to console
+            
+            # Return appropriate status based on results
+            if not created_wards and not created_polling_units:
+                return Response(
+                    {
+                        'created_wards': [],
+                        'created_polling_units': [],
+                        'errors': errors,
+                        'message': 'No items were created. Check errors for details.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                created_polling_units.append({
-                    'unit_id': pu.unit_id,
-                    'name': pu.name,
-                    'password': password  # Return password only once
-                })
-            except Exception as e:
-                errors.append(f"Polling unit creation error: {str(e)}")
+            
+            return Response(
+                {
+                    'created_wards': created_wards,
+                    'created_polling_units': created_polling_units,
+                    'errors': errors,
+                    'message': f'Created {len(created_wards)} wards and {len(created_polling_units)} polling units'
+                },
+                status=status.HTTP_201_CREATED if not errors else status.HTTP_206_PARTIAL_CONTENT
+            )
         
-        return Response(
-            {
-                'created_wards': created_wards,
-                'created_polling_units': created_polling_units,
-                'errors': errors
-            },
-            status=status.HTTP_201_CREATED if not errors else status.HTTP_206_PARTIAL_CONTENT
-        )
+        except Exception as e:
+            error_msg = f"Bulk create operation failed: {str(e)}"
+            print(f"[BULK CREATE ERROR] {error_msg}")
+            return Response(
+                {'error': error_msg, 'errors': [error_msg]},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class PollingUnitExcelUploadView(APIView):
