@@ -5,7 +5,8 @@ import dj_database_url
 from decouple import config # Since you are already using python-decouple
 import os
 from pathlib import Path
-from decouple import config
+import cloudinary
+import cloudinary.api
 
 
 # Build paths inside the project
@@ -34,6 +35,8 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'corsheaders',
     'drf_spectacular',
+    'cloudinary',
+    'cloudinary_storage',
     
     # Local apps
     'apps.accounts',
@@ -107,6 +110,24 @@ STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else 
 # Media files (User uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Cloudinary Configuration for Image & Video Storage
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': config('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': config('CLOUDINARY_API_KEY'),
+    'API_SECRET': config('CLOUDINARY_API_SECRET'),
+}
+
+# Initialize Cloudinary with credentials
+cloudinary.config(
+    cloud_name=config('CLOUDINARY_CLOUD_NAME'),
+    api_key=config('CLOUDINARY_API_KEY'),
+    api_secret=config('CLOUDINARY_API_SECRET'),
+)
+
+# Use Cloudinary for all file uploads (images, videos)
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
