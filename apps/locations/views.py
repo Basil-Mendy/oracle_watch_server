@@ -327,7 +327,6 @@ class BulkCreatePollingUnitsView(APIView):
                 except Exception as e:
                     error_msg = f"Ward '{ward_data.get('name', 'unknown')}' creation failed: {str(e)}"
                     errors.append(error_msg)
-                    print(f"[BULK CREATE] {error_msg}")  # Log to console
             
             # Create polling units
             for pu_data in polling_units_data:
@@ -353,7 +352,6 @@ class BulkCreatePollingUnitsView(APIView):
                 except Exception as e:
                     error_msg = f"Polling unit '{pu_data.get('name', 'unknown')}' creation failed: {str(e)}"
                     errors.append(error_msg)
-                    print(f"[BULK CREATE] {error_msg}")  # Log to console
             
             # Return appropriate status based on results
             if not created_wards and not created_polling_units:
@@ -379,7 +377,6 @@ class BulkCreatePollingUnitsView(APIView):
         
         except Exception as e:
             error_msg = f"Bulk create operation failed: {str(e)}"
-            print(f"[BULK CREATE ERROR] {error_msg}")
             return Response(
                 {'error': error_msg, 'errors': [error_msg]},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -409,33 +406,24 @@ class PollingUnitExcelUploadView(APIView):
     
     def options(self, request, *args, **kwargs):
         """Handle CORS preflight requests"""
-        print("[EXCEL UPLOAD] OPTIONS preflight request received")
         return Response(status=status.HTTP_200_OK)
     
     @transaction.atomic
     def post(self, request):
         try:
-            print("[EXCEL UPLOAD] Starting Excel upload process...")
-            print(f"[EXCEL UPLOAD] Request FILES keys: {list(request.FILES.keys())}")
-            print(f"[EXCEL UPLOAD] Request DATA keys: {list(request.data.keys())}")
-            
             # Get the uploaded file
             uploaded_file = request.FILES.get('file')
             if not uploaded_file:
                 error_msg = 'No file provided'
-                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
                 return Response(
                     {'error': error_msg},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            print(f"[EXCEL UPLOAD] File received: {uploaded_file.name}, Size: {uploaded_file.size} bytes")
-            
             # Check file size (max 10MB)
             max_size = 10 * 1024 * 1024  # 10MB
             if uploaded_file.size > max_size:
                 error_msg = f'File too large. Maximum size is 10MB. Your file is {uploaded_file.size / (1024*1024):.2f}MB'
-                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
                 return Response(
                     {'error': error_msg},
                     status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
@@ -443,34 +431,26 @@ class PollingUnitExcelUploadView(APIView):
             
             # Read Excel file
             file_content = uploaded_file.read()
-            print(f"[EXCEL UPLOAD] File content read: {len(file_content)} bytes")
             
             try:
                 workbook = openpyxl.load_workbook(BytesIO(file_content))
             except Exception as e:
                 error_msg = f'Invalid Excel file: {str(e)}'
-                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
                 return Response(
                     {'error': error_msg},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             worksheet = workbook.active
             
-            import time
-            start_time = time.time()
-            
             created_units = []
             failed_rows = []
             
             # Get headers (first row)
-            print("[EXCEL UPLOAD] Parsing headers...")
             headers = {}
             for col_idx, cell in enumerate(worksheet[1], 1):
                 header_name = cell.value.strip().lower() if cell.value else None
                 if header_name:
                     headers[header_name] = col_idx
-            
-            print(f"[EXCEL UPLOAD] Headers found: {list(headers.keys())}")
             
             # Validate required columns
             required_columns = ['lga_name', 'ward_name', 'unit_name']
@@ -482,13 +462,9 @@ class PollingUnitExcelUploadView(APIView):
                 )
             
             # OPTIMIZATION: Load all LGAs and Wards into memory (2 queries total)
-            print("[EXCEL UPLOAD] Loading LGAs into memory...")
             lga_map = {lga.name: lga for lga in LGA.objects.all()}
-            print(f"[EXCEL UPLOAD] Loaded {len(lga_map)} LGAs")
             
-            print("[EXCEL UPLOAD] Loading Wards into memory...")
             ward_map = {(ward.name, ward.lga_id): ward for ward in Ward.objects.all()}
-            print(f"[EXCEL UPLOAD] Loaded {len(ward_map)} Wards")
             
             # Collect all rows to create
             lgas_to_create = []
@@ -497,8 +473,6 @@ class PollingUnitExcelUploadView(APIView):
             rows_data = []
             
             # Parse all rows first
-            print("[EXCEL UPLOAD] Parsing Excel rows...")
-            parse_start = time.time()
             row_count = 0
             
             for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, values_only=True), 2):
@@ -535,11 +509,7 @@ class PollingUnitExcelUploadView(APIView):
                         'error': str(e)
                     })
             
-            parse_time = time.time() - parse_start
-            print(f"[EXCEL UPLOAD] Parsed {row_count} rows in {parse_time:.2f}s")
-            
             # Now process rows with batch database operations
-            print("[EXCEL UPLOAD] Processing rows for batch creation...")
             process_start = time.time()
             
             for row_data in rows_data:
@@ -639,12 +609,6 @@ class PollingUnitExcelUploadView(APIView):
                         'password': unit_data['password'],
                         'created_at': created_unit.created_at.isoformat()
                     })
-            
-            process_time = time.time() - process_start
-            print(f"[EXCEL UPLOAD] Processing complete in {process_time:.2f}s")
-            
-            total_time = time.time() - start_time
-            print(f"[EXCEL UPLOAD] TOTAL TIME: {total_time:.2f}s | Created: {len(created_units)} units | Failed: {len(failed_rows)} rows")
             
             return Response(
                 {
