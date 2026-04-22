@@ -409,17 +409,45 @@ class PollingUnitExcelUploadView(APIView):
     @transaction.atomic
     def post(self, request):
         try:
+            print("[EXCEL UPLOAD] Starting Excel upload process...")
+            print(f"[EXCEL UPLOAD] Request FILES keys: {list(request.FILES.keys())}")
+            print(f"[EXCEL UPLOAD] Request DATA keys: {list(request.data.keys())}")
+            
             # Get the uploaded file
             uploaded_file = request.FILES.get('file')
             if not uploaded_file:
+                error_msg = 'No file provided'
+                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
                 return Response(
-                    {'error': 'No file provided'},
+                    {'error': error_msg},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            print(f"[EXCEL UPLOAD] File received: {uploaded_file.name}, Size: {uploaded_file.size} bytes")
+            
+            # Check file size (max 10MB)
+            max_size = 10 * 1024 * 1024  # 10MB
+            if uploaded_file.size > max_size:
+                error_msg = f'File too large. Maximum size is 10MB. Your file is {uploaded_file.size / (1024*1024):.2f}MB'
+                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
+                return Response(
+                    {'error': error_msg},
+                    status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
                 )
             
             # Read Excel file
             file_content = uploaded_file.read()
-            workbook = openpyxl.load_workbook(BytesIO(file_content))
+            print(f"[EXCEL UPLOAD] File content read: {len(file_content)} bytes")
+            
+            try:
+                workbook = openpyxl.load_workbook(BytesIO(file_content))
+            except Exception as e:
+                error_msg = f'Invalid Excel file: {str(e)}'
+                print(f"[EXCEL UPLOAD ERROR] {error_msg}")
+                return Response(
+                    {'error': error_msg},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             worksheet = workbook.active
             
             created_units = []
@@ -503,7 +531,11 @@ class PollingUnitExcelUploadView(APIView):
             )
             
         except Exception as e:
+            import traceback
+            error_msg = f'Failed to process Excel file: {str(e)}'
+            print(f"[EXCEL UPLOAD ERROR] {error_msg}")
+            print(f"[EXCEL UPLOAD TRACEBACK] {traceback.format_exc()}")
             return Response(
-                {'error': f'Failed to process Excel file: {str(e)}'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': error_msg, 'details': traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
