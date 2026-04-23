@@ -14,6 +14,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 import openpyxl
 from io import BytesIO
+import time
 
 from apps.common.permissions import IsCentralAdmin
 from .utils import generate_polling_unit_password
@@ -442,6 +443,16 @@ class PollingUnitExcelUploadView(APIView):
                 )
             worksheet = workbook.active
             
+            # Check row count (max 5000 rows per upload)
+            max_rows = 5000
+            row_count_check = worksheet.max_row - 1  # Exclude header row
+            if row_count_check > max_rows:
+                error_msg = f'Too many rows. Maximum {max_rows} rows per upload. Your file has {row_count_check} rows.'
+                return Response(
+                    {'error': error_msg},
+                    status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+                )
+            
             created_units = []
             failed_rows = []
             
@@ -466,6 +477,9 @@ class PollingUnitExcelUploadView(APIView):
             
             ward_map = {(ward.name, ward.lga_id): ward for ward in Ward.objects.all()}
             
+            print(f"[EXCEL UPLOAD] Starting with {len(lga_map)} LGAs and {len(ward_map)} wards in database")
+            print(f"[EXCEL UPLOAD] Available LGAs: {list(lga_map.keys())}")
+            
             # Collect all rows to create
             lgas_to_create = []
             wards_to_create = []
@@ -481,7 +495,7 @@ class PollingUnitExcelUploadView(APIView):
                     lga_name = row[headers['lga_name'] - 1]
                     ward_name = row[headers['ward_name'] - 1]
                     unit_name = row[headers['unit_name'] - 1]
-                    custom_unit_id = row[headers.get('unit_id', 0) - 1] if 'unit_id' in headers else None
+                    unit_id = row[headers.get('unit_id', 0) - 1] if 'unit_id' in headers else None
                     
                     # Validate required fields
                     if not all([lga_name, ward_name, unit_name]):
@@ -500,7 +514,7 @@ class PollingUnitExcelUploadView(APIView):
                         'lga_name': lga_name,
                         'ward_name': ward_name,
                         'unit_name': unit_name,
-                        'custom_unit_id': custom_unit_id
+                        'unit_id': unit_id
                     })
                     
                 except Exception as e:
@@ -509,58 +523,95 @@ class PollingUnitExcelUploadView(APIView):
                         'error': str(e)
                     })
             
+            print(f"[EXCEL UPLOAD] Parsed {len(rows_data)} rows successfully, {len(failed_rows)} parsing failures")
+            if rows_data:
+                print(f"[EXCEL UPLOAD] First row sample: {rows_data[0]}")
+            
             # Now process rows with batch database operations
             process_start = time.time()
             
+            # Collect unique LGA and Ward names to create
+            lgas_to_create_names = set()
+            for row_data in rows_data:
+                lga_name = row_data['lga_name']
+                if lga_name not in lga_map:
+                    lgas_to_create_names.add(lga_name)
+            
+            # Batch create LGAs that don't exist
+            if lgas_to_create_names:
+                print(f"[EXCEL UPLOAD] Creating {len(lgas_to_create_names)} new LGAs...")
+                lgas_to_create = [LGA(name=lga_name) for lga_name in lgas_to_create_names]
+                LGA.objects.bulk_create(lgas_to_create, ignore_conflicts=True)
+                # Refresh lga_map with newly created LGAs from database
+                for lga in LGA.objects.all():
+                    lga_map[lga.name] = lga
+                print(f"[EXCEL UPLOAD] LGA Map now has {len(lga_map)} LGAs")
+            
+            # Collect unique Ward keys to create (ward_name, lga_name)
+            wards_to_create_data = []
             for row_data in rows_data:
                 lga_name = row_data['lga_name']
                 ward_name = row_data['ward_name']
                 
-                # Check if LGA exists in map, if not add to create list
-                if lga_name not in lga_map:
-                    lga = LGA(name=lga_name)
-                    lgas_to_create.append(lga)
-                    lga_map[lga_name] = lga
+                lga = lga_map.get(lga_name)
+                if lga:
+                    ward_key = (ward_name, lga.id)
+                    if ward_key not in ward_map:
+                        wards_to_create_data.append((ward_name, lga))
+                        # Add to map as placeholder to avoid duplicates
+                        ward_map[ward_key] = None
             
-            # Batch create LGAs that don't exist
-            if lgas_to_create:
-                print(f"[EXCEL UPLOAD] Creating {len(lgas_to_create)} new LGAs...")
-                created_lgas = LGA.objects.bulk_create(lgas_to_create, ignore_conflicts=True)
-                # Update map with created LGAs
-                for lga in LGA.objects.filter(name__in=[lga.name for lga in lgas_to_create]):
-                    lga_map[lga.name] = lga
+            # Batch create Wards that don't exist
+            if wards_to_create_data:
+                print(f"[EXCEL UPLOAD] Creating {len(wards_to_create_data)} new Wards...")
+                wards_to_create = [Ward(name=ward_name, lga=lga) for ward_name, lga in wards_to_create_data]
+                Ward.objects.bulk_create(wards_to_create, ignore_conflicts=True)
+                # Refresh ward_map with all wards from database
+                for ward in Ward.objects.select_related('lga').all():
+                    ward_map[(ward.name, ward.lga_id)] = ward
+                print(f"[EXCEL UPLOAD] Ward Map now has {len(ward_map)} wards")
             
-            # Now process wards and units
+            # Now process each row to create polling units
+            lga_unit_counters = {}  # Track unit count per LGA for this batch
+            
             for row_data in rows_data:
                 lga_name = row_data['lga_name']
                 ward_name = row_data['ward_name']
                 unit_name = row_data['unit_name']
-                custom_unit_id = row_data['custom_unit_id']
+                unit_id = row_data['unit_id']
                 row_idx = row_data['row_idx']
                 
                 try:
+                    # Get LGA
                     lga = lga_map.get(lga_name)
                     if not lga:
                         failed_rows.append({
                             'row': row_idx,
                             'error': f'LGA "{lga_name}" not found'
                         })
+                        print(f"[EXCEL UPLOAD] Row {row_idx}: LGA '{lga_name}' not found. Available LGAs: {list(lga_map.keys())}")
                         continue
                     
-                    # Check if Ward exists, if not add to create list
+                    # Get Ward
                     ward_key = (ward_name, lga.id)
-                    if ward_key not in ward_map:
-                        ward = Ward(name=ward_name, lga=lga)
-                        wards_to_create.append(ward)
-                        ward_map[ward_key] = ward
-                    
                     ward = ward_map.get(ward_key)
                     if not ward:
                         failed_rows.append({
                             'row': row_idx,
                             'error': f'Ward "{ward_name}" not found in LGA "{lga_name}"'
                         })
+                        print(f"[EXCEL UPLOAD] Row {row_idx}: Ward '{ward_name}' not found for LGA '{lga_name}'. Available wards for LGA: {[k for k in ward_map.keys() if k[1] == lga.id]}")
                         continue
+                    
+                    # Generate unit_id if not provided (following the model's save() logic)
+                    if not unit_id:
+                        # Initialize counter for this LGA if not already done
+                        if lga.id not in lga_unit_counters:
+                            lga_unit_counters[lga.id] = PollingUnit.objects.filter(lga=lga).count()
+                        
+                        # Increment and generate unit_id
+                        lga_unit_counters[lga.id] += 1
+                        unit_id = f"AB/{lga.acronym}/PU/{lga_unit_counters[lga.id]:04d}"
                     
                     # Create Polling Unit object for batch insert
                     password = generate_polling_unit_password()
@@ -568,9 +619,9 @@ class PollingUnitExcelUploadView(APIView):
                         name=unit_name,
                         lga=lga,
                         ward=ward,
+                        unit_id=unit_id,
                         password=make_password(password),
-                        plaintext_password=password,
-                        custom_unit_id=custom_unit_id
+                        plaintext_password=password
                     )
                     
                     units_to_create.append({
@@ -584,14 +635,7 @@ class PollingUnitExcelUploadView(APIView):
                         'row': row_idx,
                         'error': str(e)
                     })
-            
-            # Batch create Wards that don't exist
-            if wards_to_create:
-                print(f"[EXCEL UPLOAD] Creating {len(wards_to_create)} new Wards...")
-                Ward.objects.bulk_create(wards_to_create, ignore_conflicts=True)
-                # Update ward_map with newly created wards
-                for ward in Ward.objects.filter(name__in=[w.name for w in wards_to_create]):
-                    ward_map[(ward.name, ward.lga_id)] = ward
+                    print(f"[EXCEL UPLOAD] Row {row_idx}: Exception - {str(e)}")
             
             # Batch create all Polling Units
             if units_to_create:
