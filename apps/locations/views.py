@@ -540,12 +540,21 @@ class PollingUnitExcelUploadView(APIView):
             # Batch create LGAs that don't exist
             if lgas_to_create_names:
                 print(f"[EXCEL UPLOAD] Creating {len(lgas_to_create_names)} new LGAs...")
-                lgas_to_create = [LGA(name=lga_name) for lga_name in lgas_to_create_names]
+                lgas_to_create = []
+                for lga_name in lgas_to_create_names:
+                    # Generate acronym from first 3 letters of LGA name (uppercase)
+                    acronym = lga_name.strip()[:3].upper() if lga_name else ''
+                    lgas_to_create.append(LGA(name=lga_name, acronym=acronym))
+                
                 LGA.objects.bulk_create(lgas_to_create, ignore_conflicts=True)
                 # Refresh lga_map with newly created LGAs from database
                 for lga in LGA.objects.all():
                     lga_map[lga.name] = lga
                 print(f"[EXCEL UPLOAD] LGA Map now has {len(lga_map)} LGAs")
+                for lga_name in lgas_to_create_names:
+                    lga = lga_map.get(lga_name)
+                    if lga:
+                        print(f"[EXCEL UPLOAD] Created LGA: {lga_name} with acronym: {lga.acronym}")
             
             # Collect unique Ward keys to create (ward_name, lga_name)
             wards_to_create_data = []
