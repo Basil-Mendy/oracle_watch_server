@@ -581,7 +581,26 @@ class PollingUnitExcelUploadView(APIView):
                 print(f"[EXCEL UPLOAD] Ward Map now has {len(ward_map)} wards")
             
             # Now process each row to create polling units
-            lga_unit_counters = {}  # Track unit count per LGA for this batch
+            lga_unit_counters = {}  # Track max serial number per LGA for this batch
+            
+            # Initialize counters with max existing serial numbers per LGA
+            for lga in lga_map.values():
+                existing_units = PollingUnit.objects.filter(lga=lga).order_by('-unit_id')[:1]
+                if existing_units:
+                    last_unit_id = existing_units[0].unit_id
+                    try:
+                        # Extract serial number from unit_id format: AB/XXX/PU/NNNN
+                        parts = last_unit_id.split('/')
+                        if len(parts) == 4 and parts[3].isdigit():
+                            lga_unit_counters[lga.id] = int(parts[3])
+                        else:
+                            lga_unit_counters[lga.id] = 0
+                    except (IndexError, ValueError):
+                        lga_unit_counters[lga.id] = 0
+                else:
+                    lga_unit_counters[lga.id] = 0
+                
+                print(f"[EXCEL UPLOAD] LGA {lga.name} ({lga.id}): Starting counter at {lga_unit_counters[lga.id]}")
             
             for row_data in rows_data:
                 lga_name = row_data['lga_name']
@@ -601,6 +620,15 @@ class PollingUnitExcelUploadView(APIView):
                         print(f"[EXCEL UPLOAD] Row {row_idx}: LGA '{lga_name}' not found. Available LGAs: {list(lga_map.keys())}")
                         continue
                     
+                    # Validate LGA has acronym
+                    if not lga.acronym or lga.acronym.strip() == '':
+                        failed_rows.append({
+                            'row': row_idx,
+                            'error': f'LGA "{lga_name}" has no acronym. Cannot generate unit_id.'
+                        })
+                        print(f"[EXCEL UPLOAD] Row {row_idx}: LGA '{lga_name}' has no acronym!")
+                        continue
+                    
                     # Get Ward
                     ward_key = (ward_name, lga.id)
                     ward = ward_map.get(ward_key)
@@ -614,13 +642,14 @@ class PollingUnitExcelUploadView(APIView):
                     
                     # Generate unit_id if not provided (following the model's save() logic)
                     if not unit_id:
-                        # Initialize counter for this LGA if not already done
+                        # Get or initialize counter for this LGA
                         if lga.id not in lga_unit_counters:
-                            lga_unit_counters[lga.id] = PollingUnit.objects.filter(lga=lga).count()
+                            lga_unit_counters[lga.id] = 0
                         
-                        # Increment and generate unit_id
+                        # Increment counter and generate unit_id
                         lga_unit_counters[lga.id] += 1
                         unit_id = f"AB/{lga.acronym}/PU/{lga_unit_counters[lga.id]:04d}"
+                        print(f"[EXCEL UPLOAD] Row {row_idx}: Generated unit_id='{unit_id}' for LGA='{lga_name}' (acronym='{lga.acronym}', counter={lga_unit_counters[lga.id]})")
                     
                     # Create Polling Unit object for batch insert
                     password = generate_polling_unit_password()
@@ -649,6 +678,48 @@ class PollingUnitExcelUploadView(APIView):
             # Batch create all Polling Units
             if units_to_create:
                 print(f"[EXCEL UPLOAD] Creating {len(units_to_create)} Polling Units in batch...")
+                
+                # Check for duplicate unit_ids within the batch
+                unit_ids_in_batch = [u['obj'].unit_id for u in units_to_create]
+                duplicate_ids = [uid for uid in unit_ids_in_batch if unit_ids_in_batch.count(uid) > 1]
+                if duplicate_ids:
+                    return Response(
+                        {
+                            'error': f'Duplicate unit IDs generated in batch: {set(duplicate_ids)}. This indicates a data integrity issue.',
+                            'details': f'Duplicate IDs: {duplicate_ids}'
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Check if any unit_ids already exist in database
+                existing_ids = PollingUnit.objects.filter(unit_id__in=unit_ids_in_batch).values_list('unit_id', flat=True)
+                if existing_ids:
+                    conflict_rows = []
+                    for unit_data in units_to_create:
+                        if unit_data['obj'].unit_id in existing_ids:
+                            conflict_rows.append({
+                                'row': unit_data['row_idx'],
+                                'unit_id': unit_data['obj'].unit_id,
+                                'error': f"Unit ID already exists in database"
+                            })
+                    
+                    failed_rows.extend(conflict_rows)
+                    print(f"[EXCEL UPLOAD] Found {len(conflict_rows)} conflicting unit IDs: {list(existing_ids)}")
+                    
+                    # Remove conflicting units from creation list
+                    units_to_create = [u for u in units_to_create if u['obj'].unit_id not in existing_ids]
+                    
+                    if not units_to_create:
+                        return Response(
+                            {
+                                'created_count': 0,
+                                'failed_count': len(failed_rows),
+                                'errors': failed_rows,
+                                'warning': 'All units in this batch have conflicting IDs with existing data.'
+                            },
+                            status=status.HTTP_409_CONFLICT
+                        )
+                
                 polling_unit_objs = [u['obj'] for u in units_to_create]
                 created_polling_units = PollingUnit.objects.bulk_create(polling_unit_objs)
                 
