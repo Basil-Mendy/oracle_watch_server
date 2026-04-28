@@ -44,11 +44,11 @@ class Ward(models.Model):
 class PollingUnit(models.Model):
     """Polling Units within each Ward"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    unit_id = models.CharField(max_length=20, unique=True)  # e.g., "PU-00001"
+    unit_id = models.CharField(max_length=20, unique=True, blank=True)  # Auto-generated in save()
     name = models.CharField(max_length=200)
     ward = models.ForeignKey(Ward, on_delete=models.CASCADE, related_name='polling_units')
     lga = models.ForeignKey(LGA, on_delete=models.CASCADE, related_name='polling_units')
-    password = models.CharField(max_length=255)  # Encrypted password for login
+    password = models.CharField(max_length=255, blank=True)  # Auto-generated in save()
     plaintext_password = models.CharField(max_length=20, blank=True, null=True)  # Store plaintext for printing/display
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -71,11 +71,18 @@ class PollingUnit(models.Model):
             # Get the LGA acronym
             lga_acronym = self.lga.acronym
             
-            # Count existing polling units in this LGA
-            count = PollingUnit.objects.filter(lga=self.lga).count() + 1
+            # Use safer approach: order by created_at to avoid race conditions during bulk import
+            last_unit = PollingUnit.objects.filter(lga=self.lga).order_by('-created_at').first()
+            
+            if last_unit and last_unit.unit_id:
+                # Extract the number from the last unit_id (format: AB/{LGA_ACRONYM}/PU/{SERIAL})
+                last_number = int(last_unit.unit_id.split('/')[-1])
+                new_number = last_number + 1
+            else:
+                new_number = 1
             
             # Format: AB/{LGA_ACRONYM}/PU/{SERIAL}
-            self.unit_id = f"AB/{lga_acronym}/PU/{count:04d}"
+            self.unit_id = f"AB/{lga_acronym}/PU/{new_number:04d}"
         
         # Auto-generate password if not provided
         if not self.password:

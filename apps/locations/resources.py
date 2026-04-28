@@ -72,6 +72,8 @@ class PollingUnitResource(resources.ModelResource):
 
     class Meta:
         model = PollingUnit
+        # Use unit_id as the unique identifier instead of auto-generated UUID id
+        import_id_fields = ['unit_id']
         # Exclude auto-generated id and timestamps from import
         fields = ('unit_id', 'name', 'ward', 'lga', 'password', 'plaintext_password', 'is_active')
         export_order = ('id', 'unit_id', 'name', 'ward', 'lga', 'password', 'plaintext_password', 'is_active', 'created_at', 'updated_at')
