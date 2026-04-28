@@ -4,6 +4,8 @@ Models for managing LGAs, Wards, and Polling Units.
 import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.hashers import make_password
+from django.utils.crypto import get_random_string
 
 
 class LGA(models.Model):
@@ -74,4 +76,12 @@ class PollingUnit(models.Model):
             
             # Format: AB/{LGA_ACRONYM}/PU/{SERIAL}
             self.unit_id = f"AB/{lga_acronym}/PU/{count:04d}"
+        
+        # Auto-generate password if not provided
+        if not self.password:
+            # Generate a 6-digit random password
+            self.plaintext_password = get_random_string(6, allowed_chars='0123456789')
+            # Hash it for storage
+            self.password = make_password(self.plaintext_password)
+        
         super().save(*args, **kwargs)

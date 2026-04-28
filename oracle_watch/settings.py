@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'cloudinary',
     'cloudinary_storage',
+    'import_export',
     
     # Local apps
     'apps.accounts',
