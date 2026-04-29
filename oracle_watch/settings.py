@@ -1,5 +1,5 @@
 """
-Django settings for Oracle-Watch project.
+Django settings for Poll-Watch project.
 """
 import dj_database_url
 from decouple import config # Since you are already using python-decouple

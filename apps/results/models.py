@@ -86,3 +86,26 @@ class Comment(models.Model):
 
     def __str__(self):
         return f"Comment from {self.polling_unit.name} - {self.election.name}"
+
+
+class LiveStreamSession(models.Model):
+    """Track active live streaming sessions from polling units"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    election = models.ForeignKey(Election, on_delete=models.CASCADE, related_name='live_streams')
+    polling_unit = models.ForeignKey(PollingUnit, on_delete=models.CASCADE, related_name='live_streams')
+    stream_url = models.URLField(max_length=500, null=True, blank=True)  # URL to the live stream
+    thumbnail_url = models.URLField(max_length=500, null=True, blank=True)  # Thumbnail image URL
+    is_active = models.BooleanField(default=True)  # Whether stream is currently live
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.IntegerField(default=0)  # Duration in seconds
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['election', 'polling_unit']),
+            models.Index(fields=['election', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"Stream from {self.polling_unit.name} - {self.election.name} ({'active' if self.is_active else 'ended'})"

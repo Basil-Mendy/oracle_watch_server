@@ -26,6 +26,7 @@ urlpatterns = [
     path('admin/videos/', admin_views.AdminVideosListView.as_view(), name='admin-videos'),
     path('admin/images/', admin_views.AdminImagesListView.as_view(), name='admin-images'),
     path('admin/comments/', admin_views.AdminCommentsListView.as_view(), name='admin-comments'),
+    path('admin/live-streams/', admin_views.AdminLiveStreamsListView.as_view(), name='admin-live-streams'),
     path('admin/all/', admin_views.AdminAllResultsListView.as_view(), name='admin-all-results'),
     
     # Result Retrieval (Public)

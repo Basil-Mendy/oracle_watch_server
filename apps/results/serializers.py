@@ -2,7 +2,7 @@
 Serializers for the results app - converts ElectionResult, Image, Video, Comment models to/from JSON
 """
 from rest_framework import serializers
-from .models import ElectionResult, Image, Video, Comment
+from .models import ElectionResult, Image, Video, Comment, LiveStreamSession
 
 
 class WardSerializer(serializers.Serializer):
@@ -89,6 +89,28 @@ class CommentSerializer(serializers.ModelSerializer):
             'comment_text', 'created_at', 'created_by', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class LiveStreamSessionSerializer(serializers.ModelSerializer):
+    """Serializer for LiveStreamSession model"""
+    polling_unit = PollingUnitNestedSerializer(read_only=True)
+    duration = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = LiveStreamSession
+        fields = [
+            'id', 'election', 'polling_unit', 'stream_url', 'thumbnail_url',
+            'is_active', 'started_at', 'ended_at', 'duration', 'duration_seconds'
+        ]
+        read_only_fields = ['id', 'started_at']
+    
+    def get_duration(self, obj):
+        """Get formatted duration (HH:MM:SS)"""
+        seconds = obj.duration_seconds
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 class AllResultsSerializer(serializers.Serializer):
