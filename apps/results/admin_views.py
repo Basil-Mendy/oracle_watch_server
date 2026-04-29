@@ -249,51 +249,60 @@ class AdminLiveStreamsListView(APIView):
     permission_classes = [IsAuthenticated]  # Only authenticated admins can view
     
     def get(self, request):
-        election_id = request.query_params.get('election_id')
-        ward_filter = request.query_params.get('ward')
-        lga_filter = request.query_params.get('lga')
-        search = request.query_params.get('search')
-        
-        if not election_id:
-            return Response(
-                {'error': 'election_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         try:
-            election = Election.objects.get(id=election_id)
-        except Election.DoesNotExist:
+            election_id = request.query_params.get('election_id')
+            ward_filter = request.query_params.get('ward')
+            lga_filter = request.query_params.get('lga')
+            search = request.query_params.get('search')
+            
+            if not election_id:
+                return Response(
+                    {'error': 'election_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            try:
+                election = Election.objects.get(id=election_id)
+            except Election.DoesNotExist:
+                return Response(
+                    {'error': 'Election not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Fetch active live streams with related polling unit data
+            live_streams = LiveStreamSession.objects.filter(
+                election=election,
+                is_active=True
+            ).select_related(
+                'polling_unit', 'polling_unit__ward', 'polling_unit__lga'
+            )
+            
+            # Apply filters
+            if lga_filter:
+                live_streams = live_streams.filter(polling_unit__lga__id=lga_filter)
+            
+            if ward_filter:
+                live_streams = live_streams.filter(polling_unit__ward__id=ward_filter)
+            
+            if search:
+                live_streams = live_streams.filter(
+                    Q(polling_unit__name__icontains=search) |
+                    Q(polling_unit__unit_id__icontains=search)
+                )
+            
+            # Order by newest first
+            live_streams = live_streams.order_by('-started_at')
+            
+            serializer = LiveStreamSessionSerializer(live_streams, many=True, context={'request': request})
+            return Response({
+                'count': live_streams.count(),
+                'results': serializer.data
+            })
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in AdminLiveStreamsListView: {str(e)}", exc_info=True)
             return Response(
-                {'error': 'Election not found'},
-                status=status.HTTP_404_NOT_FOUND
+                {'error': f'Failed to fetch live streams: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-        # Fetch active live streams with related polling unit data
-        live_streams = LiveStreamSession.objects.filter(
-            election=election,
-            is_active=True
-        ).select_related(
-            'polling_unit', 'polling_unit__ward', 'polling_unit__lga'
-        )
-        
-        # Apply filters
-        if lga_filter:
-            live_streams = live_streams.filter(polling_unit__lga__id=lga_filter)
-        
-        if ward_filter:
-            live_streams = live_streams.filter(polling_unit__ward__id=ward_filter)
-        
-        if search:
-            live_streams = live_streams.filter(
-                Q(polling_unit__name__icontains=search) |
-                Q(polling_unit__unit_id__icontains=search)
-            )
-        
-        # Order by newest first
-        live_streams = live_streams.order_by('-started_at')
-        
-        serializer = LiveStreamSessionSerializer(live_streams, many=True, context={'request': request})
-        return Response({
-            'count': live_streams.count(),
-            'results': serializer.data
-        })
