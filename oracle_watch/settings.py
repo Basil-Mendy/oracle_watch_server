@@ -79,24 +79,33 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'oracle_watch.wsgi.application'
 
-# Database Configuration
-# DATABASES = {
-#     'default': dj_database_url.config(
-#         default=config('DATABASE_URL'),
-#         conn_max_age=600,
-#         ssl_require=not config('DEBUG', cast=bool)
-#     )
-# }
+
+
+# DATABASE_URL = config('DATABASE_URL', default=None)
+
+# if DATABASE_URL:
+#     # ✅ Production (Railway PostgreSQL)
+#     DATABASES = {
+#         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
+#     }
+# else:
+#     # ✅ Local (SQLite)
+#     DATABASES = {
+#         'default': {
+#             'ENGINE': 'django.db.backends.sqlite3',
+#             'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+#         }
+#     }
 
 DATABASE_URL = config('DATABASE_URL', default=None)
 
-if DATABASE_URL:
-    # ✅ Production (Railway PostgreSQL)
+if DATABASE_URL and "postgres" in DATABASE_URL:
+    # Only use DATABASE_URL if it's PostgreSQL (production)
     DATABASES = {
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
-    # ✅ Local (SQLite)
+    # Always fallback locally
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',

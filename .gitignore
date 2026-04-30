@@ -40,7 +40,6 @@ env/
 # Django
 *.log
 db.sqlite3
-asahcs_abia.db
 media/
 staticfiles/
 

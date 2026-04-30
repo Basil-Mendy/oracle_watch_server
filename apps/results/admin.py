@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ElectionResult, Image, Video, Comment
+from .models import ElectionResult, Image, Video, Comment, LiveStreamSession
 
 
 @admin.register(ElectionResult)
@@ -36,3 +36,24 @@ class CommentAdmin(admin.ModelAdmin):
     search_fields = ['polling_unit__name', 'polling_unit__unit_id']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(LiveStreamSession)
+class LiveStreamSessionAdmin(admin.ModelAdmin):
+    list_display = ['polling_unit', 'election', 'is_active', 'started_at', 'ended_at', 'duration_seconds']
+    list_filter = ['election', 'is_active', 'started_at']
+    search_fields = ['polling_unit__name', 'polling_unit__unit_id']
+    ordering = ['-started_at']
+    readonly_fields = ['id', 'started_at', 'duration_seconds']
+    
+    fieldsets = (
+        ('Stream Information', {
+            'fields': ('id', 'election', 'polling_unit', 'is_active')
+        }),
+        ('URLs', {
+            'fields': ('stream_url', 'thumbnail_url')
+        }),
+        ('Timing', {
+            'fields': ('started_at', 'ended_at', 'duration_seconds')
+        }),
+    )
