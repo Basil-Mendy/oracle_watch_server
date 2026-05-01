@@ -14,7 +14,7 @@ from django.contrib.auth.hashers import check_password
 
 from apps.locations.models import PollingUnit, LGA, Ward
 from apps.elections.models import Election, Party
-from .models import ElectionResult, Image, Video, Comment
+from .models import ElectionResult, Image, Video, Comment, LiveStreamSession
 from .serializers import (
     ElectionResultSerializer, ImageSerializer, VideoSerializer,
     CommentSerializer, AllResultsSerializer
@@ -73,6 +73,9 @@ class SubmitElectionResultView(APIView, PollingUnitAuthMixin):
             )
         
         try:
+            from .models import PendingResultSubmission
+            import json
+            
             election = Election.objects.get(id=election_id)
             
             # Check election is active
@@ -82,34 +85,34 @@ class SubmitElectionResultView(APIView, PollingUnitAuthMixin):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            created = []
+            # Convert results to vote_data format {party_id: vote_count}
+            vote_data = {}
             for result_data in results_data:
                 party_id = result_data.get('party_id')
                 vote_count = result_data.get('vote_count', 0)
-                
-                try:
-                    party = Party.objects.get(id=party_id)
-                    
-                    # Create or update result
-                    result, created_flag = ElectionResult.objects.update_or_create(
-                        election=election,
-                        polling_unit=polling_unit,
-                        party=party,
-                        defaults={'vote_count': vote_count}
-                    )
-                    
-                    created.append({
-                        'party_name': party.name,
-                        'vote_count': vote_count,
-                        'created': created_flag
-                    })
-                except Party.DoesNotExist:
-                    pass
+                if party_id:
+                    vote_data[party_id] = vote_count
             
-            return Response(
-                {'message': 'Results submitted successfully', 'results': created},
-                status=status.HTTP_201_CREATED
+            if not vote_data:
+                return Response(
+                    {'error': 'At least one vote count is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create pending submission for approval workflow
+            submission = PendingResultSubmission.objects.create(
+                election=election,
+                polling_unit=polling_unit,
+                vote_data=vote_data,
+                status='pending'
             )
+            
+            return Response({
+                'message': 'Results submitted for review. Awaiting admin approval.',
+                'submission_id': str(submission.id),
+                'status': 'pending',
+                'vote_count': sum(vote_data.values())
+            }, status=status.HTTP_201_CREATED)
         except Election.DoesNotExist:
             return Response(
                 {'error': 'Election not found'},
@@ -157,30 +160,42 @@ class UploadResultMediaView(APIView, PollingUnitAuthMixin):
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 
-                image = Image.objects.create(
-                    election=election,
-                    polling_unit=polling_unit,
-                    image=file_obj,
-                    uploaded_by=polling_unit.unit_id
-                )
-                
-                return Response(
-                    {'message': 'Image uploaded successfully', 'image': ImageSerializer(image, context={'request': request}).data},
-                    status=status.HTTP_201_CREATED
-                )
+                try:
+                    image = Image.objects.create(
+                        election=election,
+                        polling_unit=polling_unit,
+                        image=file_obj,
+                        uploaded_by=polling_unit.unit_id
+                    )
+                    
+                    return Response(
+                        {'message': 'Image uploaded successfully', 'image': ImageSerializer(image, context={'request': request}).data},
+                        status=status.HTTP_201_CREATED
+                    )
+                except Exception as e:
+                    return Response(
+                        {'error': f'Failed to save image: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             elif file_type == 'video':
-                video = Video.objects.create(
-                    election=election,
-                    polling_unit=polling_unit,
-                    video=file_obj,
-                    uploaded_by=polling_unit.unit_id
-                )
-                
-                return Response(
-                    {'message': 'Video uploaded successfully', 'video': VideoSerializer(video, context={'request': request}).data},
-                    status=status.HTTP_201_CREATED
-                )
+                try:
+                    video = Video.objects.create(
+                        election=election,
+                        polling_unit=polling_unit,
+                        video=file_obj,
+                        uploaded_by=polling_unit.unit_id
+                    )
+                    
+                    return Response(
+                        {'message': 'Video uploaded successfully', 'video': VideoSerializer(video, context={'request': request}).data},
+                        status=status.HTTP_201_CREATED
+                    )
+                except Exception as e:
+                    return Response(
+                        {'error': f'Failed to save video: {str(e)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             else:
                 return Response(
@@ -192,6 +207,11 @@ class UploadResultMediaView(APIView, PollingUnitAuthMixin):
             return Response(
                 {'error': 'Election not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'An unexpected error occurred: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -701,3 +721,522 @@ class GetHierarchicalResultsView(APIView):
             'polling_units': unit_results,
             'total_votes': sum(unit['total_votes'] for unit in unit_results)
         }
+
+
+# ======================== ANALYTICS / AUDIT ENDPOINTS ========================
+
+
+class GetPendingResultsView(APIView):
+    """
+    GET: Get all pending result submissions grouped by LGA
+    Query params:
+        - election_id: UUID (required)
+    
+    Requires admin authentication (via token or session)
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        # Check if user is authenticated (admin)
+        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required. Please log in as an admin.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        election_id = request.query_params.get('election_id')
+        
+        if not election_id:
+            return Response(
+                {'error': 'election_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            election = Election.objects.get(id=election_id)
+            
+            from .models import PendingResultSubmission
+            
+            # Get all pending submissions
+            pending = PendingResultSubmission.objects.filter(
+                election=election
+            ).select_related('polling_unit', 'polling_unit__lga')
+            
+            # Group by LGA
+            lga_data = {}
+            stats = {
+                'pending': pending.filter(status='pending').count(),
+                'approved': pending.filter(status='approved').count(),
+                'rejected': pending.filter(status='rejected').count(),
+            }
+            
+            for submission in pending:
+                lga_name = submission.polling_unit.lga.name
+                if lga_name not in lga_data:
+                    lga_data[lga_name] = {
+                        'lga_id': str(submission.polling_unit.lga.id),
+                        'submissions': [],
+                        'stats': {
+                            'received': 0,
+                            'approved': 0,
+                            'rejected': 0,
+                            'pending': 0
+                        }
+                    }
+                
+                submission_dict = {
+                    'id': str(submission.id),
+                    'polling_unit': {
+                        'id': str(submission.polling_unit.id),
+                        'unit_id': submission.polling_unit.unit_id,
+                        'name': submission.polling_unit.name,
+                    },
+                    'status': submission.status,
+                    'submitted_at': submission.submitted_at.isoformat(),
+                    'vote_data': submission.vote_data,
+                    'ec8a_form_image': submission.ec8a_form_image.url if submission.ec8a_form_image else None,
+                    'admin_notes': submission.admin_notes,
+                    'reviewed_by': submission.reviewed_by,
+                }
+                
+                lga_data[lga_name]['submissions'].append(submission_dict)
+                lga_data[lga_name]['stats']['received'] += 1
+                lga_data[lga_name]['stats'][submission.status] += 1
+            
+            # Serialize parties
+            from apps.elections.serializers import PartySerializer
+            parties = [ep.party for ep in election.election_parties.all()]
+            parties_data = PartySerializer(parties, many=True, context={'request': request}).data
+            
+            return Response({
+                'election': {'id': str(election.id), 'name': election.name, 'parties': parties_data},
+                'overall_stats': stats,
+                'lgas': lga_data
+            })
+        
+        except Election.DoesNotExist:
+            return Response(
+                {'error': 'Election not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class ApproveResultSubmissionView(APIView):
+    """
+    POST: Approve a pending result submission
+    Body: {
+        "submission_id": "uuid",
+        "edited_votes": {...}  # Optional: if admin modified vote counts
+    }
+    
+    Admin only (requires authentication)
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        # Check if user is authenticated (admin)
+        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required. Please log in as an admin.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        submission_id = request.data.get('submission_id')
+        edited_votes = request.data.get('edited_votes')
+        
+        if not submission_id:
+            return Response(
+                {'error': 'submission_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from .models import PendingResultSubmission
+            
+            submission = PendingResultSubmission.objects.get(id=submission_id)
+            
+            if submission.status != 'pending':
+                return Response(
+                    {'error': f'Submission status is {submission.status}, not pending'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Use provided votes or original submission votes
+            final_votes = edited_votes if edited_votes else submission.vote_data
+            
+            # Save the result for each party
+            for party_id, vote_count in final_votes.items():
+                try:
+                    party = Party.objects.get(id=party_id)
+                    result, _ = ElectionResult.objects.update_or_create(
+                        election=submission.election,
+                        polling_unit=submission.polling_unit,
+                        party=party,
+                        defaults={
+                            'vote_count': vote_count,
+                            'submission': submission,
+                            'approved_at': __import__('django.utils.timezone', fromlist=['now']).now()
+                        }
+                    )
+                except Party.DoesNotExist:
+                    pass
+            
+            # Update submission status
+            submission.status = 'approved'
+            submission.reviewed_by = request.user.username
+            submission.reviewed_at = __import__('django.utils.timezone', fromlist=['now']).now()
+            if edited_votes:
+                submission.edited_vote_data = edited_votes
+            submission.save()
+            
+            return Response({
+                'message': 'Result approved successfully',
+                'submission_id': str(submission.id)
+            })
+        
+        except PendingResultSubmission.DoesNotExist:
+            return Response(
+                {'error': 'Submission not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class RejectResultSubmissionView(APIView):
+    """
+    POST: Reject a pending result submission
+    Body: {
+        "submission_id": "uuid",
+        "reason": "Reason for rejection"
+    }
+    
+    Admin only (requires authentication)
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        # Check if user is authenticated (admin)
+        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required. Please log in as an admin.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        submission_id = request.data.get('submission_id')
+        reason = request.data.get('reason', '')
+        
+        if not submission_id:
+            return Response(
+                {'error': 'submission_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from .models import PendingResultSubmission, RejectionNotification
+            
+            submission = PendingResultSubmission.objects.get(id=submission_id)
+            
+            if submission.status != 'pending':
+                return Response(
+                    {'error': f'Submission status is {submission.status}, not pending'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Update submission status
+            submission.status = 'rejected'
+            submission.reviewed_by = request.user.username
+            submission.reviewed_at = __import__('django.utils.timezone', fromlist=['now']).now()
+            submission.admin_notes = reason
+            submission.save()
+            
+            # Create rejection notification for polling unit
+            RejectionNotification.objects.create(
+                submission=submission,
+                reason=reason,
+                rejected_by=request.user.username
+            )
+            
+            return Response({
+                'message': 'Result rejected. Polling unit will be notified to resubmit.',
+                'submission_id': str(submission.id)
+            })
+        
+        except PendingResultSubmission.DoesNotExist:
+            return Response(
+                {'error': 'Submission not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class SubmitResultWithEC8AView(APIView, PollingUnitAuthMixin):
+    """
+    POST: Submit election results with EC8A form image (for audit workflow)
+    Expects multipart/form-data with:
+        - unit_id
+        - password
+        - election_id
+        - ec8a_form_image (file)
+        - vote_data (JSON string): {"party_uuid": vote_count}
+    
+    Polling unit uses this endpoint to submit results for audit
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        polling_unit, error = self.authenticate_polling_unit(request)
+        if error:
+            return Response(error, status=status.HTTP_401_UNAUTHORIZED)
+        
+        election_id = request.data.get('election_id')
+        ec8a_form_image = request.FILES.get('ec8a_form_image')
+        vote_data_str = request.data.get('vote_data')
+        
+        if not election_id or not ec8a_form_image or not vote_data_str:
+            return Response(
+                {'error': 'election_id, ec8a_form_image, and vote_data are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            import json
+            from .models import PendingResultSubmission
+            
+            election = Election.objects.get(id=election_id)
+            
+            # Parse vote_data JSON
+            try:
+                vote_data = json.loads(vote_data_str)
+            except json.JSONDecodeError:
+                return Response(
+                    {'error': 'vote_data must be valid JSON'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create pending submission
+            submission = PendingResultSubmission.objects.create(
+                election=election,
+                polling_unit=polling_unit,
+                ec8a_form_image=ec8a_form_image,
+                vote_data=vote_data,
+                status='pending'
+            )
+            
+            return Response({
+                'message': 'Result submitted for review',
+                'submission_id': str(submission.id),
+                'status': 'pending'
+            }, status=status.HTTP_201_CREATED)
+        
+        except Election.DoesNotExist:
+            return Response(
+                {'error': 'Election not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class GetRejectionNotificationsView(APIView, PollingUnitAuthMixin):
+    """
+    GET: Get rejection notifications for a polling unit
+    Query params:
+        - unit_id: Polling unit ID
+        - password: Polling unit password
+        - election_id (optional): Filter by election
+    
+    Returns all rejection notifications for this polling unit
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        polling_unit, error = self.authenticate_polling_unit(request)
+        if error:
+            return Response(error, status=status.HTTP_401_UNAUTHORIZED)
+        
+        election_id = request.query_params.get('election_id')
+        
+        try:
+            from .models import RejectionNotification, PendingResultSubmission
+            
+            # Get all rejected submissions for this polling unit
+            rejected_submissions = PendingResultSubmission.objects.filter(
+                polling_unit=polling_unit,
+                status='rejected'
+            )
+            
+            if election_id:
+                rejected_submissions = rejected_submissions.filter(election_id=election_id)
+            
+            # Get notifications for these submissions
+            notifications = RejectionNotification.objects.filter(
+                submission__in=rejected_submissions
+            ).select_related('submission', 'submission__election').order_by('-rejected_at')
+            
+            notification_data = []
+            for notif in notifications:
+                notification_data.append({
+                    'id': str(notif.id),
+                    'submission_id': str(notif.submission.id),
+                    'election_name': notif.submission.election.name,
+                    'reason': notif.reason,
+                    'rejected_at': notif.rejected_at.isoformat(),
+                    'rejected_by': notif.rejected_by,
+                    'is_read': notif.is_read,
+                    'read_at': notif.read_at.isoformat() if notif.read_at else None,
+                })
+                
+                # Mark as read
+                if not notif.is_read:
+                    notif.is_read = True
+                    notif.read_at = __import__('django.utils.timezone', fromlist=['now']).now()
+                    notif.save()
+            
+            return Response({
+                'polling_unit': {
+                    'id': str(polling_unit.id),
+                    'unit_id': polling_unit.unit_id,
+                    'name': polling_unit.name,
+                },
+                'notifications': notification_data,
+                'total_count': len(notification_data)
+            })
+        
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class StartLiveStreamView(APIView, PollingUnitAuthMixin):
+    """
+    POST: Start a live stream session from a polling unit
+    Body: {
+        "unit_id": "PU-00001",
+        "password": "...",
+        "election_id": "uuid"
+    }
+    
+    Returns: {
+        "id": "stream_session_id",
+        "polling_unit_id": "...",
+        "is_active": true,
+        "started_at": "2024-01-01T00:00:00Z"
+    }
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        polling_unit, error = self.authenticate_polling_unit(request)
+        if error:
+            return Response(error, status=status.HTTP_401_UNAUTHORIZED)
+        
+        election_id = request.data.get('election_id')
+        if not election_id:
+            return Response(
+                {'error': 'election_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            election = Election.objects.get(id=election_id)
+            
+            # End any existing active streams for this polling unit in this election
+            LiveStreamSession.objects.filter(
+                polling_unit=polling_unit,
+                election=election,
+                is_active=True
+            ).update(is_active=False)
+            
+            # Create new stream session
+            stream = LiveStreamSession.objects.create(
+                election=election,
+                polling_unit=polling_unit,
+                is_active=True
+            )
+            
+            from .serializers import LiveStreamSessionSerializer
+            serializer = LiveStreamSessionSerializer(stream, context={'request': request})
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Election.DoesNotExist:
+            return Response(
+                {'error': 'Election not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class EndLiveStreamView(APIView, PollingUnitAuthMixin):
+    """
+    POST: End a live stream session from a polling unit
+    Body: {
+        "unit_id": "PU-00001",
+        "password": "...",
+        "stream_id": "uuid",
+        "duration_seconds": 3600  # Optional: duration of the stream
+    }
+    
+    Returns: {
+        "id": "stream_session_id",
+        "is_active": false,
+        "ended_at": "2024-01-01T01:00:00Z",
+        "duration_seconds": 3600
+    }
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        polling_unit, error = self.authenticate_polling_unit(request)
+        if error:
+            return Response(error, status=status.HTTP_401_UNAUTHORIZED)
+        
+        stream_id = request.data.get('stream_id')
+        if not stream_id:
+            return Response(
+                {'error': 'stream_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            stream = LiveStreamSession.objects.get(
+                id=stream_id,
+                polling_unit=polling_unit,
+                is_active=True
+            )
+            
+            # Update stream with end time
+            stream.is_active = False
+            stream.ended_at = timezone.now()
+            
+            # Calculate duration if provided
+            duration_seconds = request.data.get('duration_seconds')
+            if duration_seconds:
+                stream.duration_seconds = duration_seconds
+            else:
+                # Calculate from start time
+                time_diff = stream.ended_at - stream.started_at
+                stream.duration_seconds = int(time_diff.total_seconds())
+            
+            stream.save()
+            
+            from .serializers import LiveStreamSessionSerializer
+            serializer = LiveStreamSessionSerializer(stream, context={'request': request})
+            
+            return Response(serializer.data)
+        
+        except LiveStreamSession.DoesNotExist:
+            return Response(
+                {'error': 'Stream not found or already ended'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

@@ -94,15 +94,36 @@ class CommentSerializer(serializers.ModelSerializer):
 class LiveStreamSessionSerializer(serializers.ModelSerializer):
     """Serializer for LiveStreamSession model"""
     polling_unit = PollingUnitNestedSerializer(read_only=True)
+    polling_unit_id = serializers.SerializerMethodField()
+    polling_unit_name = serializers.SerializerMethodField()
+    lga_name = serializers.SerializerMethodField()
+    ward_name = serializers.SerializerMethodField()
     duration = serializers.SerializerMethodField()
     
     class Meta:
         model = LiveStreamSession
         fields = [
-            'id', 'election', 'polling_unit', 'stream_url', 'thumbnail_url',
+            'id', 'election', 'polling_unit', 'polling_unit_id', 'polling_unit_name',
+            'lga_name', 'ward_name', 'stream_url', 'thumbnail_url',
             'is_active', 'started_at', 'ended_at', 'duration', 'duration_seconds'
         ]
         read_only_fields = ['id', 'started_at']
+    
+    def get_polling_unit_id(self, obj):
+        """Get polling unit ID"""
+        return obj.polling_unit.unit_id if obj.polling_unit else None
+    
+    def get_polling_unit_name(self, obj):
+        """Get polling unit name"""
+        return obj.polling_unit.name if obj.polling_unit else None
+    
+    def get_lga_name(self, obj):
+        """Get LGA name"""
+        return obj.polling_unit.lga.name if obj.polling_unit and obj.polling_unit.lga else None
+    
+    def get_ward_name(self, obj):
+        """Get ward name"""
+        return obj.polling_unit.ward.name if obj.polling_unit and obj.polling_unit.ward else None
     
     def get_duration(self, obj):
         """Get formatted duration (HH:MM:SS)"""

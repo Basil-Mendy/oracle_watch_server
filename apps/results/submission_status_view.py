@@ -78,17 +78,38 @@ class GetSubmissionStatusView(APIView, PollingUnitAuthMixin):
         try:
             election = Election.objects.get(id=election_id)
             
-            # Get vote submission status
+            # Import PendingResultSubmission for approval status
+            from .models import PendingResultSubmission
+            
+            # Get vote submission status with approval workflow
             vote_results = ElectionResult.objects.filter(
                 election=election,
                 polling_unit=polling_unit
             ).select_related('party')
             
+            # Check for pending submission (latest one)
+            pending_submission = PendingResultSubmission.objects.filter(
+                election=election,
+                polling_unit=polling_unit
+            ).order_by('-submitted_at').first()
+            
+            # Determine vote status: not submitted, pending approval, approved, or rejected
+            approval_status = None
+            rejection_reason = None
+            if pending_submission:
+                approval_status = pending_submission.status
+                if approval_status == 'rejected':
+                    rejection_reason = pending_submission.admin_notes
+            elif vote_results.exists():
+                approval_status = 'approved'
+            
             vote_status = {
-                'submitted': vote_results.exists(),
+                'submitted': vote_results.exists() or pending_submission is not None,
                 'merge_behavior': 'OVERRIDE',
                 'merge_behavior_description': 'New vote count submission will replace the previous one',
                 'count': vote_results.count(),
+                'approval_status': approval_status,  # 'pending', 'approved', 'rejected', or None
+                'rejection_reason': rejection_reason,  # Populated if rejected
                 'details': []
             }
             
@@ -106,6 +127,10 @@ class GetSubmissionStatusView(APIView, PollingUnitAuthMixin):
                         'vote_count': result.vote_count,
                         'last_updated': result.updated_at.isoformat()
                     })
+            elif pending_submission:
+                # No approved results yet, but there's a pending submission
+                vote_status['submitted_at'] = pending_submission.submitted_at.isoformat()
+                vote_status['pending_submission_id'] = str(pending_submission.id)
             
             # Get image submission status
             images = Image.objects.filter(

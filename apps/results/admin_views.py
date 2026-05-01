@@ -81,7 +81,7 @@ class AdminImagesListView(APIView):
     GET: List all images for an election (for admin dashboard)
     Query params: election_id (required)
     
-    Returns: List of images with polling unit metadata
+    Returns: List of images with polling unit metadata and EC8A form identification
     """
     permission_classes = [IsAuthenticated]
     
@@ -123,10 +123,36 @@ class AdminImagesListView(APIView):
         
         images = images.order_by('-uploaded_at')
         
+        # Get serialized data
         serializer = ImageSerializer(images, many=True, context={'request': request})
+        image_data = serializer.data
+        
+        # Enrich with EC8A form flag - identify images that were submitted with vote counts
+        from .models import PendingResultSubmission
+        
+        for img in image_data:
+            # Check if this polling unit has any vote submissions around this image's upload time
+            pu_id = img.get('polling_unit', {}).get('id')
+            upload_time = img.get('uploaded_at')
+            
+            if pu_id and upload_time:
+                try:
+                    pending = PendingResultSubmission.objects.filter(
+                        election=election,
+                        polling_unit_id=pu_id,
+                        status__in=['pending', 'approved', 'rejected']
+                    ).order_by('-submitted_at').first()
+                    
+                    # Mark as EC8A form if there's a vote submission
+                    img['is_ec8a_form'] = pending is not None
+                except:
+                    img['is_ec8a_form'] = False
+            else:
+                img['is_ec8a_form'] = False
+        
         return Response({
             'count': images.count(),
-            'images': serializer.data
+            'images': image_data
         })
 
 

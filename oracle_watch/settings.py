@@ -173,11 +173,13 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration (Allow React frontend to call Django backend)
-CORS_ALLOWED_ORIGINS = config(
-    'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8000,https://oracle-watch-client.vercel.app',
-    cast=lambda v: [s.strip() for s in v.split(',')]
-)
+_cors_default = 'http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8000,https://oracle-watch-client.vercel.app'
+_cors_from_config = config('CORS_ALLOWED_ORIGINS', default=_cors_default)
+_cors_list = [s.strip() for s in _cors_from_config.split(',')]
+# Ensure localhost:3001 is in the list (in case it was removed)
+if 'http://localhost:3001' not in _cors_list:
+    _cors_list.insert(0, 'http://localhost:3001')
+CORS_ALLOWED_ORIGINS = _cors_list
 
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [

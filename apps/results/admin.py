@@ -1,5 +1,31 @@
 from django.contrib import admin
-from .models import ElectionResult, Image, Video, Comment, LiveStreamSession
+from .models import ElectionResult, Image, Video, Comment, LiveStreamSession, PendingResultSubmission
+
+
+@admin.register(PendingResultSubmission)
+class PendingResultSubmissionAdmin(admin.ModelAdmin):
+    list_display = ['polling_unit', 'election', 'status', 'submitted_at', 'reviewed_by']
+    list_filter = ['election', 'status', 'submitted_at']
+    search_fields = ['polling_unit__name', 'polling_unit__unit_id', 'reviewed_by']
+    ordering = ['-submitted_at']
+    readonly_fields = ['id', 'submitted_at', 'reviewed_at', 'vote_data', 'ec8a_form_image']
+    
+    fieldsets = (
+        ('Submission Info', {
+            'fields': ('id', 'election', 'polling_unit', 'submitted_at', 'ec8a_form_image')
+        }),
+        ('Vote Data', {
+            'fields': ('vote_data', 'edited_vote_data')
+        }),
+        ('Status & Review', {
+            'fields': ('status', 'reviewed_at', 'reviewed_by', 'admin_notes', 'edit_reason')
+        }),
+    )
+    
+    def get_readonly_fields(self, request, obj=None):
+        if obj and obj.status != 'pending':
+            return self.readonly_fields + ['election', 'polling_unit', 'vote_data']
+        return self.readonly_fields
 
 
 @admin.register(ElectionResult)
