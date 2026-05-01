@@ -734,11 +734,11 @@ class GetPendingResultsView(APIView):
     
     Requires admin authentication (via token or session)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
         # Check if user is authenticated (admin)
-        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+        if not request.user or not request.user.is_authenticated:
             return Response(
                 {'error': 'Authentication required. Please log in as an admin.'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -831,11 +831,11 @@ class ApproveResultSubmissionView(APIView):
     
     Admin only (requires authentication)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     def post(self, request):
         # Check if user is authenticated (admin)
-        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+        if not request.user or not request.user.is_authenticated:
             return Response(
                 {'error': 'Authentication required. Please log in as an admin.'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -911,11 +911,11 @@ class RejectResultSubmissionView(APIView):
     
     Admin only (requires authentication)
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     
     def post(self, request):
         # Check if user is authenticated (admin)
-        if not hasattr(request, 'user') or request.user is None or not request.user.is_authenticated:
+        if not request.user or not request.user.is_authenticated:
             return Response(
                 {'error': 'Authentication required. Please log in as an admin.'},
                 status=status.HTTP_401_UNAUTHORIZED
