@@ -792,7 +792,7 @@ class GetPendingResultsView(APIView):
                         'name': submission.polling_unit.name,
                     },
                     'status': submission.status,
-                    'submitted_at': submission.submitted_at.isoformat(),
+                    'submitted_at': submission.submitted_at.isoformat() if submission.submitted_at else None,
                     'vote_data': submission.vote_data,
                     'ec8a_form_image': submission.ec8a_form_image.url if submission.ec8a_form_image else None,
                     'admin_notes': submission.admin_notes,
@@ -818,6 +818,14 @@ class GetPendingResultsView(APIView):
             return Response(
                 {'error': 'Election not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in GetPendingResultsView: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'Internal server error: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
