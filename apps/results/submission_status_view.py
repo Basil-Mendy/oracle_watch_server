@@ -116,8 +116,10 @@ class GetSubmissionStatusView(APIView, PollingUnitAuthMixin):
             if vote_results.exists():
                 # Get submission timestamp from first vote result
                 first_result = vote_results.first()
-                vote_status['submitted_at'] = first_result.submitted_at.isoformat()
-                vote_status['updated_at'] = first_result.updated_at.isoformat()
+                if first_result and first_result.submitted_at:
+                    vote_status['submitted_at'] = first_result.submitted_at.isoformat()
+                if first_result and first_result.updated_at:
+                    vote_status['updated_at'] = first_result.updated_at.isoformat()
                 
                 for result in vote_results:
                     vote_status['details'].append({
@@ -125,11 +127,12 @@ class GetSubmissionStatusView(APIView, PollingUnitAuthMixin):
                         'party_name': result.party.name,
                         'party_acronym': result.party.acronym,
                         'vote_count': result.vote_count,
-                        'last_updated': result.updated_at.isoformat()
+                        'last_updated': result.updated_at.isoformat() if result.updated_at else None
                     })
             elif pending_submission:
                 # No approved results yet, but there's a pending submission
-                vote_status['submitted_at'] = pending_submission.submitted_at.isoformat()
+                if pending_submission.submitted_at:
+                    vote_status['submitted_at'] = pending_submission.submitted_at.isoformat()
                 vote_status['pending_submission_id'] = str(pending_submission.id)
             
             # Get image submission status
@@ -217,4 +220,12 @@ class GetSubmissionStatusView(APIView, PollingUnitAuthMixin):
             return Response(
                 {'error': 'Election not found'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in GetSubmissionStatusView._get_submission_status: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'Internal server error: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
