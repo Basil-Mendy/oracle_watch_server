@@ -19,6 +19,7 @@ urlpatterns = [
     # Live Stream Management (Polling Unit Agent)
     path('start-live-stream/', views.StartLiveStreamView.as_view(), name='start-live-stream'),
     path('end-live-stream/', views.EndLiveStreamView.as_view(), name='end-live-stream'),
+    path('save-video-metadata/', views.SaveVideoMetadataView.as_view(), name='save-video-metadata'),
     
     # Download endpoints
     path('download-image/<uuid:image_id>/', DownloadImageView.as_view(), name='download-image'),

@@ -3,10 +3,18 @@ Models for storing election results, images, videos, and comments.
 """
 import uuid
 import json
+import os
+from pathlib import Path
 from django.db import models
 from django.core.validators import MinValueValidator
+from django.core.files.storage import FileSystemStorage
 from apps.locations.models import PollingUnit
 from apps.elections.models import Election, Party
+
+# Local file storage for videos (bypass Cloudinary to avoid validation issues)
+# Use absolute path to media directory
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+video_storage = FileSystemStorage(location=os.path.join(BASE_DIR, 'media', 'election_videos'))
 
 
 class PendingResultSubmission(models.Model):
@@ -99,18 +107,39 @@ class Image(models.Model):
 
 
 class Video(models.Model):
-    """Videos uploaded by polling unit agents"""
+    """
+    Videos uploaded by polling unit agents
+    Supports segmented video uploads with direct Cloudinary streaming
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     election = models.ForeignKey(Election, on_delete=models.CASCADE, related_name='videos')
     polling_unit = models.ForeignKey(PollingUnit, on_delete=models.CASCADE, related_name='videos')
-    video = models.FileField(upload_to='election_videos/%Y/%m/%d/')
+    
+    # Local storage (legacy support)
+    video = models.FileField(upload_to='%Y/%m/%d/', storage=video_storage, null=True, blank=True)
+    
+    # Cloudinary storage (direct upload)
+    cloudinary_url = models.URLField(null=True, blank=True, help_text='Direct Cloudinary URL for streaming')
+    
+    # Video metadata
+    duration = models.IntegerField(null=True, blank=True, help_text='Video duration in milliseconds')
+    segment_id = models.CharField(max_length=255, null=True, blank=True, help_text='Segment identifier')
+    recording_timestamp = models.DateTimeField(null=True, blank=True, help_text='When the video was recorded')
+    
+    # JSON metadata for filtering and searching
+    metadata = models.JSONField(default=dict, blank=True, help_text='Additional metadata (size, codec, resolution, etc)')
+    
+    # Upload tracking
     uploaded_at = models.DateTimeField(auto_now_add=True)
     uploaded_by = models.CharField(max_length=100)  # Polling unit ID or name
+    is_live_stream = models.BooleanField(default=False, help_text='Whether this was a live stream segment')
 
     class Meta:
         ordering = ['-uploaded_at']
         indexes = [
             models.Index(fields=['election', 'polling_unit']),
+            models.Index(fields=['election', 'recording_timestamp']),
+            models.Index(fields=['polling_unit', 'recording_timestamp']),
         ]
 
     def __str__(self):

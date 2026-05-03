@@ -60,22 +60,53 @@ class ImageSerializer(serializers.ModelSerializer):
 
 
 class VideoSerializer(serializers.ModelSerializer):
-    """Serializer for Video model"""
+    """Serializer for Video model with support for direct Cloudinary uploads"""
     video_url = serializers.SerializerMethodField()
+    streaming_url = serializers.SerializerMethodField()
     polling_unit = PollingUnitNestedSerializer(read_only=True)
+    duration_formatted = serializers.SerializerMethodField()
     
     class Meta:
         model = Video
-        fields = ['id', 'election', 'polling_unit', 'video', 'video_url', 'uploaded_at', 'uploaded_by']
-        read_only_fields = ['id', 'uploaded_at']
+        fields = [
+            'id', 'election', 'polling_unit', 
+            'video', 'video_url',
+            'cloudinary_url', 'streaming_url',
+            'duration', 'duration_formatted',
+            'segment_id', 'recording_timestamp',
+            'metadata', 'is_live_stream',
+            'uploaded_at', 'uploaded_by'
+        ]
+        read_only_fields = ['id', 'uploaded_at', 'video_url', 'streaming_url', 'duration_formatted']
     
     def get_video_url(self, obj):
-        """Get the full URL to the video"""
+        """Get the full URL to the local video file (if available)"""
         if obj.video:
             request = self.context.get('request')
             if request:
                 return request.build_absolute_uri(obj.video.url)
         return None
+    
+    def get_streaming_url(self, obj):
+        """Get the streaming URL (prioritize Cloudinary URL for direct streaming)"""
+        if obj.cloudinary_url:
+            # Return Cloudinary URL optimized for streaming
+            return obj.cloudinary_url.replace('/upload/', '/upload/q_auto,f_auto/')
+        elif obj.video:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.video.url)
+        return None
+    
+    def get_duration_formatted(self, obj):
+        """Format duration as MM:SS"""
+        if not obj.duration:
+            return None
+        total_seconds = obj.duration // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes:02d}:{seconds:02d}"
+
 
 
 class CommentSerializer(serializers.ModelSerializer):

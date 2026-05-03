@@ -180,6 +180,22 @@ class UploadResultMediaView(APIView, PollingUnitAuthMixin):
             
             elif file_type == 'video':
                 try:
+                    # Validate that it's actually a video file by checking mime type
+                    import mimetypes
+                    mime_type = file_obj.content_type or mimetypes.guess_type(file_obj.name)[0]
+                    
+                    # Allow common video formats
+                    allowed_video_types = [
+                        'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+                        'video/x-matroska', 'video/ogg', 'video/mpeg', 'video/x-flv'
+                    ]
+                    
+                    if mime_type and mime_type not in allowed_video_types:
+                        return Response(
+                            {'error': f'Unsupported video format: {mime_type}. Allowed: MP4, WebM, MOV, AVI, MKV, OGG, MPEG'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
                     video = Video.objects.create(
                         election=election,
                         polling_unit=polling_unit,
@@ -192,8 +208,10 @@ class UploadResultMediaView(APIView, PollingUnitAuthMixin):
                         status=status.HTTP_201_CREATED
                     )
                 except Exception as e:
+                    import traceback
+                    error_detail = f'{str(e)} | Type: {type(e).__name__} | Traceback: {traceback.format_exc()}'
                     return Response(
-                        {'error': f'Failed to save video: {str(e)}'},
+                        {'error': f'Failed to save video: {error_detail}'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
             
@@ -1248,3 +1266,91 @@ class EndLiveStreamView(APIView, PollingUnitAuthMixin):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class SaveVideoMetadataView(APIView, PollingUnitAuthMixin):
+    """
+    POST: Save video metadata after direct Cloudinary upload
+    Called by frontend after successful Cloudinary upload to store video record in DB
+    
+    Body: {
+        "unit_id": "PU-00001",
+        "password": "...",
+        "election_id": "uuid",
+        "cloudinary_url": "https://res.cloudinary.com/...",
+        "duration": 125000,  # milliseconds
+        "metadata": {         # optional
+            "width": 1280,
+            "height": 720,
+            "bitrate": 2500,
+            "codec": "vp9"
+        },
+        "segment_id": "segment-123",  # optional
+        "is_live_stream": false       # optional, default false
+    }
+    
+    Returns: Video object with metadata
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        polling_unit, error = self.authenticate_polling_unit(request)
+        if error:
+            return Response(error, status=status.HTTP_401_UNAUTHORIZED)
+        
+        election_id = request.data.get('election_id')
+        cloudinary_url = request.data.get('cloudinary_url')
+        
+        if not election_id or not cloudinary_url:
+            return Response(
+                {'error': 'election_id and cloudinary_url are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from django.utils import timezone
+            
+            election = Election.objects.get(id=election_id)
+            
+            # Get optional parameters
+            duration = request.data.get('duration')  # milliseconds
+            metadata = request.data.get('metadata', {})
+            segment_id = request.data.get('segment_id')
+            is_live_stream = request.data.get('is_live_stream', False)
+            
+            # Create or update video record
+            video, created = Video.objects.update_or_create(
+                segment_id=segment_id if segment_id else None,
+                defaults={
+                    'election': election,
+                    'polling_unit': polling_unit,
+                    'cloudinary_url': cloudinary_url,
+                    'duration': duration,
+                    'metadata': metadata,
+                    'is_live_stream': is_live_stream,
+                    'recording_timestamp': timezone.now(),
+                    'uploaded_by': polling_unit.unit_id
+                }
+            )
+            
+            serializer = VideoSerializer(video, context={'request': request})
+            
+            return Response({
+                'message': 'Video metadata saved successfully',
+                'created': created,
+                'video': serializer.data
+            }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+            
+        except Election.DoesNotExist:
+            return Response(
+                {'error': 'Election not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            import traceback
+            error_detail = f'{str(e)} | Traceback: {traceback.format_exc()}'
+            return Response(
+                {'error': f'Failed to save video metadata: {error_detail}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+

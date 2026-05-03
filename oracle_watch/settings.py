@@ -23,6 +23,8 @@ ALLOWED_HOSTS = config(
 
 # Application definition
 INSTALLED_APPS = [
+    'daphne',  # WebSocket support (must be first)
+    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -38,6 +40,7 @@ INSTALLED_APPS = [
     'cloudinary',
     'cloudinary_storage',
     'import_export',
+    'channels',  # Django Channels for WebSocket
     
     # Local apps
     'apps.accounts',
@@ -77,25 +80,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'oracle_watch.wsgi.application'
+ASGI_APPLICATION = 'oracle_watch.asgi.application'
 
 
-
-# DATABASE_URL = config('DATABASE_URL', default=None)
-
-# if DATABASE_URL:
-#     # ✅ Production (Railway PostgreSQL)
-#     DATABASES = {
-#         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
-#     }
-# else:
-#     # ✅ Local (SQLite)
-#     DATABASES = {
-#         'default': {
-#             'ENGINE': 'django.db.backends.sqlite3',
-#             'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
-#         }
-#     }
 
 DATABASE_URL = config('DATABASE_URL', default=None)
 
@@ -231,3 +218,11 @@ if not config('DEBUG', cast=bool):
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Django Channels Configuration for Real-time WebSocket Communication
+# Using in-memory backend for development (no Redis required)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
